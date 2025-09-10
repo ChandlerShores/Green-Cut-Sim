@@ -1,13 +1,14 @@
 import OpenAI from 'openai'
-import { 
-  StatePacket, 
-  EvaluatorOutput, 
-  EvaluatorOutputSchema, 
+import {
+  StatePacket,
+  EvaluatorOutput,
+  EvaluatorOutputSchema,
   RngEvent,
   Direction,
   DirStrength,
   Caps
 } from './contracts'
+import { buildEvaluatorPrompt } from './lib/prompt'
 
 export class Evaluator {
   private openai: OpenAI | null = null
@@ -49,103 +50,11 @@ export class Evaluator {
     rngEvent: RngEvent,
     caps: Caps
   ): Promise<EvaluatorOutput> {
-    const systemPrompt = `You are the Evaluator. Given a CEO declaration, a state packet, and an RNG event packet (with a D100 roll and event_type), return STRICT JSON per schema.
-You DO NOT compute final numeric deltas. You judge fit and produce normalized strengths (0..1).
-If the declaration tries to inject external events or money, set policy.oob = true and record violations; otherwise judge best-effort.
-If the declaration is incoherent or irrelevant, set a small penalties.nonsense_penalty (0..1) and keep signals near-neutral.
-Always tie your rationale and severity notes to concrete state_packet facts and the provided RNG event. Never invent external shocks or money; only use the event packet provided.
-Respond with STRICT JSON only, no extra text.`
-
-    const userPrompt = `Evaluate this CEO declaration: "${declaration}"
-
-Current state:
-- Turn: ${statePacket.turn_no}
-- Period: ${statePacket.period || 'N/A'}
-- Event: ${statePacket.event.category} (${statePacket.event.tier})
-- Morale: ${statePacket.morale}
-- Credibility: ${statePacket.credibility}
-- Backlog: ${statePacket.backlog}
-- Service: ${statePacket.service}
-- Share: ${statePacket.share}
-- Cash runway: ${statePacket.cash_runway} months
-- Flags: ${Object.entries(statePacket.flags).filter(([_, v]) => v).map(([k, _]) => k).join(', ') || 'none'}
-- Pressures: ${Object.entries(statePacket.pressures).filter(([_, v]) => v).map(([k, _]) => k).join(', ') || 'none'}
-- Recent moves: ${statePacket.recent_moves.join(', ') || 'none'}
-${statePacket.pnl ? `
-Financial metrics:
-- Revenue: $${statePacket.pnl.revenue}M
-- COGS: $${statePacket.pnl.cogs}M
-- Gross Margin: ${statePacket.pnl.gm_percent}%
-- OpEx: $${statePacket.pnl.opex}M
-- Net Income: $${statePacket.pnl.net}M
-- Cash: $${statePacket.pnl.cash}M` : ''}
-${statePacket.kpis ? `
-Enhanced KPIs:
-- Market Share: ${statePacket.kpis.share_percent}%
-- Service NPS: ${statePacket.kpis.service_nps}
-- Team Morale: ${statePacket.kpis.morale}
-- Backlog Units: ${statePacket.kpis.backlog_units}` : ''}
-${statePacket.tail_risk !== undefined ? `
-Risk metrics:
-- Tail Risk: ${statePacket.tail_risk}/100
-- CEO Credibility: ${statePacket.ceo_credibility}/100` : ''}
-${statePacket.active_shocks && statePacket.active_shocks.length > 0 ? `
-Active Shocks: ${statePacket.active_shocks.map(s => `${s.name} (${s.tier})`).join(', ')}` : ''}
-${statePacket.active_rewards && statePacket.active_rewards.length > 0 ? `
-Active Rewards: ${statePacket.active_rewards.map(r => `${r.name} (${r.tier})`).join(', ')}` : ''}
-
-RNG Event: Roll ${rngEvent.roll}, Type: ${rngEvent.event_type}${rngEvent.tier ? `, Tier: ${rngEvent.tier}` : ''}${rngEvent.name ? `, Name: "${rngEvent.name}"` : ''}${rngEvent.effects ? `
-Event Effects:
-- Revenue: ${rngEvent.effects.revenue_delta > 0 ? '+' : ''}${rngEvent.effects.revenue_delta}M
-- COGS: ${rngEvent.effects.cogs_delta > 0 ? '+' : ''}${rngEvent.effects.cogs_delta}M
-- OpEx: ${rngEvent.effects.opex_delta > 0 ? '+' : ''}${rngEvent.effects.opex_delta}M
-- Cash: ${rngEvent.effects.cash_delta > 0 ? '+' : ''}${rngEvent.effects.cash_delta}M
-- Market Share: ${rngEvent.effects.share_delta > 0 ? '+' : ''}${rngEvent.effects.share_delta}%
-- NPS: ${rngEvent.effects.nps_delta > 0 ? '+' : ''}${rngEvent.effects.nps_delta}
-- Morale: ${rngEvent.effects.morale_delta > 0 ? '+' : ''}${rngEvent.effects.morale_delta}
-- Backlog: ${rngEvent.effects.backlog_delta > 0 ? '+' : ''}${rngEvent.effects.backlog_delta} units${rngEvent.effects.notes ? `
-- Notes: ${rngEvent.effects.notes}` : ''}` : ''}${rngEvent.hints ? `, Hints: ${rngEvent.hints.join(', ')}` : ''}
-
-Return valid JSON matching this schema:
-{
-  "assessment": {
-    "intent": ["intent1", "intent2"],
-    "targets": ["target1", "target2"],
-    "tone": "decisive|conciliatory|panicked|etc",
-    "fit_reasons": ["reason1", "reason2"]
-  },
-  "signals": {
-    "morale": {"dir": "up|down|none", "strength": 0.0-1.0},
-    "credibility": {"dir": "up|down|none", "strength": 0.0-1.0},
-    "backlog_pressure": {"dir": "up|down|none", "strength": 0.0-1.0},
-    "service_risk": {"dir": "up|down|none", "strength": 0.0-1.0}
-  },
-  "event": {
-    "roll": ${rngEvent.roll},
-    "event_type": "${rngEvent.event_type}",
-    "impact_channels": {
-      "morale": {"dir": "up|down|none", "strength": 0.0-1.0},
-      "credibility": {"dir": "up|down|none", "strength": 0.0-1.0},
-      "backlog_pressure": {"dir": "up|down|none", "strength": 0.0-1.0},
-      "service_risk": {"dir": "up|down|none", "strength": 0.0-1.0}
-    },
-    "severity_note": "brief qualitative severity rationale${rngEvent.name ? ` - Event: ${rngEvent.name}` : ''}${rngEvent.tier ? ` (Tier ${rngEvent.tier})` : ''}"
-  },
-  "integrated": {
-    "synergy": "aligned|undermined|neutral",
-    "narrative_hook": "1-2 sentences tying CEO + event + state"
-  },
-  "penalties": {
-    "nonsense_penalty": 0.0-1.0
-  },
-  "policy": {
-    "oob": false,
-    "violations": []
-  },
-  "rationale": "concise; must cite state_packet facts"
-}
-
-Respond ONLY with JSON conforming to the schema. No prose.`
+    const { systemPrompt, userPrompt } = buildEvaluatorPrompt(
+      declaration,
+      statePacket,
+      rngEvent
+    )
 
     try {
       const response = await this.openai!.chat.completions.create({
