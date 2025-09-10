@@ -1,13 +1,14 @@
 import OpenAI from 'openai'
-import { 
-  StatePacket, 
-  EvaluatorOutput, 
-  EvaluatorOutputSchema, 
+import {
+  StatePacket,
+  EvaluatorOutput,
+  EvaluatorOutputSchema,
   RngEvent,
   Direction,
   DirStrength,
   Caps
 } from './contracts'
+import { OOB_KEYWORDS, NONSENSE_KEYWORDS } from './rules/evaluatorKeywords'
 
 export class Evaluator {
   private openai: OpenAI | null = null
@@ -188,15 +189,13 @@ Respond ONLY with JSON conforming to the schema. No prose.`
     caps: Caps
   ): Promise<EvaluatorOutput> {
     const lowerDecl = declaration.toLowerCase()
-    
+
     // Check for out-of-bounds content
-    const oobKeywords = ['million', 'billion', 'dollar', 'funding', 'investment', 'acquisition', 'merger', 'recession', 'crisis']
-    const isOob = oobKeywords.some(keyword => lowerDecl.includes(keyword))
-    
+    const isOob = OOB_KEYWORDS.some(keyword => lowerDecl.includes(keyword))
+
     // Check for nonsense/incoherent content
-    const nonsenseKeywords = ['blah', 'random', 'nonsense', 'gibberish', 'test', 'placeholder']
-    const isNonsense = nonsenseKeywords.some(keyword => lowerDecl.includes(keyword)) || 
-                      declaration.length < 10 || 
+    const isNonsense = NONSENSE_KEYWORDS.some(keyword => lowerDecl.includes(keyword)) ||
+                      declaration.length < 10 ||
                       /^[^a-zA-Z]*$/.test(declaration)
     
     // Generate CEO signals based on content and state
