@@ -82,6 +82,14 @@ npm run reset
 npm run
 ```
 
+## Keyword Configuration
+
+The rule-based evaluator checks declarations against keyword lists for
+out-of-bounds claims and incoherent statements. These lists live in
+`src/rules/evaluatorKeywords.ts`. To handle new scenarios, add keywords
+to `OOB_KEYWORDS` or `NONSENSE_KEYWORDS`, then restart the server or
+rebuild the project.
+
 ## API Reference
 
 ### Create New Run
